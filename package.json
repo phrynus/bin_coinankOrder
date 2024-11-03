@@ -1,0 +1,19 @@
+{
+  "name": "bin_coinankorder",
+  "module": "src/main.ts",
+  "scripts": {
+    "dev": "bun run --watch src/main.ts",
+    "start": "bun run src/main.js",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.12"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "type": "module",
+  "dependencies": {
+    "ccxt": "^4.4.25"
+  }
+}
