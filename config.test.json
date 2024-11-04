@@ -1,0 +1,9 @@
+{
+  "apiKey": "",
+  "apiSecret": "",
+  "amount": 50,
+  "duration": 60,
+  "max_coins": 2,
+  "price_depth": 20,
+  "blacklist": ["BTC", "ETH"]
+}
