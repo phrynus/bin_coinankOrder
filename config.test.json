@@ -3,7 +3,9 @@
   "apiSecret": "",
   "amount": 50,
   "duration": 60,
-  "max_coins": 2,
-  "price_depth": 20,
-  "blacklist": ["BTC", "ETH"]
+  "maxCoins": 3,
+  "priceDepth": 20,
+  "buyNetAmount": 500000,
+  "sideNetAmount": 500000,
+  "blacklist": ["BTC", "ETH", "PEPE"]
 }
