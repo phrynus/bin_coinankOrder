@@ -22,8 +22,15 @@ type FundData struct {
 	M15Net float64 `json:"m15net"`
 }
 
+// 全局客户端
+var client *futures.Client
+
+var symbols []futures.Symbol
+
+var symbolsString []string
+
 func main() {
-	client := binance.NewFuturesClient(config.ApiKey, config.ApiSecret)
+	client = binance.NewFuturesClient(config.ApiKey, config.ApiSecret)
 	// 时间偏移
 	client.NewSetServerTimeService().Do(context.Background())
 	// 获取交易信息
@@ -32,17 +39,17 @@ func main() {
 		log.Fatal(err)
 	}
 	// 赛选币种
-	symbols := make([]futures.Symbol, 0)
 	for _, s := range info.Symbols {
 		if s.QuoteAsset == "USDT" && s.ContractType == "PERPETUAL" && s.Status == "TRADING" && !contains(config.Blacklist, s.BaseAsset) {
 			symbols = append(symbols, s)
+			symbolsString = append(symbolsString, s.BaseAsset)
 		}
 	}
-	// log.Println(symbols[0])
+	// log.Println(symbolsString[0])
 	//
 	go func() {
 		for {
-			err := Go(client, symbols)
+			err := Go()
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -54,9 +61,9 @@ func main() {
 	select {}
 }
 
-func Go(client *futures.Client, symbols []futures.Symbol) error {
+func Go() error {
 	// 判断账户是否有资格
-	// if err := isAccount(client); err != nil {
+	// if err := isAccount(); err != nil {
 	// 	log.Println(err)
 	// 	return nil
 	// }
@@ -80,7 +87,7 @@ func Go(client *futures.Client, symbols []futures.Symbol) error {
 }
 
 // 判断账户是否有资格
-func isAccount(client *futures.Client) error {
+func isAccount() error {
 	// 账户信息
 	account, err := client.NewGetAccountService().Do(context.Background())
 	if err != nil {
@@ -169,8 +176,8 @@ func fetchFundCoinankData() ([]FundData, error) {
 		itemMap := item.(map[string]interface{})
 		Coin := itemMap["baseCoin"].(string)
 
-		// 检查是否在黑名单中
-		if !contains(config.Blacklist, Coin) {
+		// 检查是否在名单中
+		if contains(symbolsString, Coin) {
 			fundData := FundData{
 				Coin:   Coin,
 				Side:   itemMap["m5net"].(float64) > 50*10000,
@@ -217,4 +224,10 @@ func getTopAndBottomM5Net(data []FundData) (symbolsGo []FundData, err error) {
 	}
 
 	return symbolsGo, nil
+}
+
+// 取book 价格
+func getBookPrice(symbol FundData, i int) (float64 error) {
+
+	return
 }
