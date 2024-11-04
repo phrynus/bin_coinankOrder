@@ -47,7 +47,7 @@ func main() {
 				log.Fatal(err)
 			}
 			// 等待 s时间
-			time.Sleep(30 * time.Second)
+			time.Sleep(time.Duration(config.Duration) * time.Second)
 		}
 	}()
 	//
@@ -72,7 +72,7 @@ func Go(client *futures.Client, symbols []futures.Symbol) error {
 		return nil
 	}
 	for _, s := range symbolsGo {
-		if s.Side && s.M5Net > 50*10000 || s.Side == false && s.M5Net < -50*10000 {
+		if s.Side && s.M5Net > config.BuyNetAmount || !s.Side && s.M5Net < -config.SideNetAmount {
 			log.Println(s)
 		}
 	}
