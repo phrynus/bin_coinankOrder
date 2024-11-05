@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -29,8 +30,27 @@ var symbols []futures.Symbol
 
 var symbolsString []string
 
+var tr *http.Transport
+
 func main() {
+
+	tr = &http.Transport{
+		MaxIdleConns: 100,
+		Dial: func(netw, addr string) (net.Conn, error) {
+			conn, err := net.DialTimeout(netw, addr, time.Second*2) //设置建立连接超时
+			if err != nil {
+				return nil, err
+			}
+			err = conn.SetDeadline(time.Now().Add(time.Second * 3)) //设置发送接受数据超时
+			if err != nil {
+				return nil, err
+			}
+			return conn, nil
+		},
+	}
+
 	client = binance.NewFuturesClient(config.ApiKey, config.ApiSecret)
+	binance.SetWsProxyUrl(config.Proxy)
 	// 时间偏移
 	client.NewSetServerTimeService().Do(context.Background())
 	// 获取交易信息
@@ -46,13 +66,17 @@ func main() {
 		}
 	}
 	// log.Println(symbolsString[0])
-	//
+
+	// 延迟到下一个整分钟
+	log.Println("延迟到下一个整分钟执行")
+	now := time.Now()
+	nextMinute := now.Truncate(time.Minute).Add(time.Minute)
+	duration := nextMinute.Sub(now)
+	time.Sleep(duration)
+
 	go func() {
 		for {
-			err := Go()
-			if err != nil {
-				log.Fatal(err)
-			}
+			go CoinankGo()
 			// 等待 s时间
 			time.Sleep(time.Duration(config.Duration) * time.Second)
 		}
@@ -61,7 +85,7 @@ func main() {
 	select {}
 }
 
-func Go() error {
+func CoinankGo() error {
 	// 判断账户是否有资格
 	// if err := isAccount(); err != nil {
 	// 	log.Println(err)
@@ -78,11 +102,29 @@ func Go() error {
 		log.Println(err)
 		return nil
 	}
+	// log.Println(symbolsGo)
 	for _, s := range symbolsGo {
-		if s.Side && s.M5Net > config.BuyNetAmount || !s.Side && s.M5Net < -config.SideNetAmount {
-			log.Println(s)
+		klines, err := client.NewKlinesService().Symbol(s.Coin + "USDT").
+			Interval("5m").Limit(201).Do(context.Background())
+		if err != nil {
+			fmt.Println(err)
+			return nil
 		}
+		closedPrices := make([]float64, 0, len(klines))
+		for _, kline := range klines[:len(klines)] {
+			closeFloat, err := strconv.ParseFloat(kline.Close, 64)
+			if err != nil {
+				log.Println(err)
+				return nil
+			}
+			closedPrices = append(closedPrices, closeFloat) // 将每个 K 线的 Close 值添加到切片中
+		}
+		rsi := RSI(closedPrices, 6)
+		crsi := CRSI(closedPrices, 6)
+
+		log.Println(s.Coin, s.Side, closedPrices[200], rsi[200], crsi[200])
 	}
+
 	return nil
 }
 
@@ -143,8 +185,12 @@ func fetchFundCoinankData() ([]FundData, error) {
 	}
 	req.Header.Add("coinank-apikey", getKey())
 
+	client := &http.Client{
+		Transport: tr,
+	}
+
 	// 发送请求
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("请求失败: %v", err)
 		return nil, err
@@ -222,8 +268,15 @@ func getTopAndBottomM5Net(data []FundData) (symbolsGo []FundData, err error) {
 	} else {
 		return symbolsGo, fmt.Errorf("数据量不足")
 	}
+	target2 := make([]FundData, 0)
 
-	return symbolsGo, nil
+	for _, s := range symbolsGo {
+		if s.Side && s.M5Net > config.BuyNetAmount || !s.Side && s.M5Net < -config.SideNetAmount {
+			target2 = append(target2, s)
+		}
+	}
+
+	return target2, nil
 }
 
 // 取book 价格

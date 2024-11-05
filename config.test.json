@@ -1,11 +1,12 @@
 {
   "apiKey": "",
   "apiSecret": "",
+  "proxy": "http://127.0.0.1:7890",
   "amount": 50,
-  "duration": 60,
+  "duration": 30,
   "maxCoins": 3,
   "priceDepth": 20,
   "buyNetAmount": 500000,
   "sideNetAmount": 500000,
-  "blacklist": ["BTC", "ETH", "PEPE"]
+  "blacklist": ["BTC", "ETH"]
 }
