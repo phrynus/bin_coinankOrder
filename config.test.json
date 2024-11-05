@@ -8,5 +8,5 @@
   "priceDepth": 20,
   "buyNetAmount": 500000,
   "sideNetAmount": 500000,
-  "blacklist": ["BTC", "ETH"]
+  "blacklist": ["BTC", "ETH", "SOL"]
 }

@@ -12,10 +12,11 @@ type Config struct {
 	ApiKey        string   `json:"apiKey"`
 	ApiSecret     string   `json:"apiSecret"`
 	Proxy         string   `json:"proxy"`
-	Amount        float64  `json:"amount"`        // 挂单金额
 	Duration      int      `json:"duration"`      // 挂单超时 s
 	MaxCoins      int      `json:"maxCoins"`      // 前几个币种
 	PriceDepth    int      `json:"priceDepth"`    // orderBook挂单位置
+	RsiLevel      float64  `json:"rsiLevel"`      // RSI 标准值
+	Amount        float64  `json:"amount"`        // 挂单金额
 	BuyNetAmount  float64  `json:"buyNetAmount"`  // 多单挂单量
 	SideNetAmount float64  `json:"sideNetAmount"` // 空单挂单量
 	Blacklist     []string `json:"blacklist"`     // 黑名单

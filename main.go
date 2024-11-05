@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"time"
@@ -30,26 +34,47 @@ var symbols []futures.Symbol
 
 var symbolsString []string
 
-var tr *http.Transport
+var httpClient *http.Client
 
 func main() {
+	fmt.Printf("Go version: %s\n", runtime.Version())
 
-	tr = &http.Transport{
-		MaxIdleConns: 100,
-		Dial: func(netw, addr string) (net.Conn, error) {
-			conn, err := net.DialTimeout(netw, addr, time.Second*2) //设置建立连接超时
-			if err != nil {
-				return nil, err
-			}
-			err = conn.SetDeadline(time.Now().Add(time.Second * 3)) //设置发送接受数据超时
-			if err != nil {
-				return nil, err
-			}
-			return conn, nil
+	// / 获取当前日期，按日期生成日志文件名
+	currentDate := time.Now().Format("2006-01-02")
+	logFileName := fmt.Sprintf("logs/%s.log", currentDate)
+
+	// 创建日志文件目录（如果不存在）
+	err := os.MkdirAll("logs", os.ModePerm)
+	if err != nil {
+		fmt.Println("Error creating logs directory:", err)
+		return
+	}
+
+	// 打开或创建日志文件，追加模式
+	file, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Println("Error opening log file:", err)
+		return
+	}
+	defer file.Close()
+
+	multiWriter := io.MultiWriter(file, os.Stdout)
+
+	log.SetFlags(log.LstdFlags) // 清除默认的时间标志
+	log.SetOutput(multiWriter)
+
+	_proxy, _ := url.Parse(config.Proxy)
+	// tr =
+	httpClient = &http.Client{
+		Transport: &http.Transport{
+			Proxy:           http.ProxyURL(_proxy),
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
+		Timeout: time.Second * 5,
 	}
 
 	client = binance.NewFuturesClient(config.ApiKey, config.ApiSecret)
+	client.HTTPClient = httpClient
 	binance.SetWsProxyUrl(config.Proxy)
 	// 时间偏移
 	client.NewSetServerTimeService().Do(context.Background())
@@ -65,15 +90,13 @@ func main() {
 			symbolsString = append(symbolsString, s.BaseAsset)
 		}
 	}
-	// log.Println(symbolsString[0])
 
-	// 延迟到下一个整分钟
-	log.Println("延迟到下一个整分钟执行")
 	now := time.Now()
 	nextMinute := now.Truncate(time.Minute).Add(time.Minute)
 	duration := nextMinute.Sub(now)
 	time.Sleep(duration)
 
+	log.Println("[CoinankGo] 开始")
 	go func() {
 		for {
 			go CoinankGo()
@@ -85,8 +108,10 @@ func main() {
 	select {}
 }
 
+// 初始化
+
+// Coinank开始
 func CoinankGo() error {
-	// 判断账户是否有资格
 	// if err := isAccount(); err != nil {
 	// 	log.Println(err)
 	// 	return nil
@@ -97,33 +122,18 @@ func CoinankGo() error {
 		log.Println(err)
 		return nil
 	}
-	symbolsGo, err := getTopAndBottomM5Net(coinank)
+	symbolsNet, err := getTopAndBottomM5Net(coinank)
 	if err != nil {
 		log.Println(err)
 		return nil
 	}
-	// log.Println(symbolsGo)
-	for _, s := range symbolsGo {
-		klines, err := client.NewKlinesService().Symbol(s.Coin + "USDT").
-			Interval("5m").Limit(201).Do(context.Background())
-		if err != nil {
-			fmt.Println(err)
-			return nil
-		}
-		closedPrices := make([]float64, 0, len(klines))
-		for _, kline := range klines[:len(klines)] {
-			closeFloat, err := strconv.ParseFloat(kline.Close, 64)
-			if err != nil {
-				log.Println(err)
-				return nil
-			}
-			closedPrices = append(closedPrices, closeFloat) // 将每个 K 线的 Close 值添加到切片中
-		}
-		rsi := RSI(closedPrices, 6)
-		crsi := CRSI(closedPrices, 6)
-
-		log.Println(s.Coin, s.Side, closedPrices[200], rsi[200], crsi[200])
+	symbolsFilter, err := filterSymbols(symbolsNet)
+	if err != nil {
+		log.Println(err)
+		return nil
 	}
+	// log.Println(symbolsFilter)
+	fmt.Println(symbolsFilter)
 
 	return nil
 }
@@ -185,12 +195,8 @@ func fetchFundCoinankData() ([]FundData, error) {
 	}
 	req.Header.Add("coinank-apikey", getKey())
 
-	client := &http.Client{
-		Transport: tr,
-	}
-
 	// 发送请求
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Printf("请求失败: %v", err)
 		return nil, err
@@ -240,7 +246,7 @@ func fetchFundCoinankData() ([]FundData, error) {
 }
 
 // 取高低数据
-func getTopAndBottomM5Net(data []FundData) (symbolsGo []FundData, err error) {
+func getTopAndBottomM5Net(data []FundData) (symbolsNet []FundData, err error) {
 	// 使用 sort.Slice 来排序
 	target := make([]FundData, len(data))
 	copy(target, data)
@@ -250,9 +256,9 @@ func getTopAndBottomM5Net(data []FundData) (symbolsGo []FundData, err error) {
 
 	// 获取最高的两个
 	if len(data) >= config.MaxCoins {
-		symbolsGo = append(symbolsGo, target[:config.MaxCoins]...)
+		symbolsNet = append(symbolsNet, target[:config.MaxCoins]...)
 	} else {
-		return symbolsGo, fmt.Errorf("数据量不足")
+		return symbolsNet, fmt.Errorf("数据量不足")
 	}
 
 	target1 := make([]FundData, len(data))
@@ -264,13 +270,13 @@ func getTopAndBottomM5Net(data []FundData) (symbolsGo []FundData, err error) {
 
 	// 获取最低的两个
 	if len(target1) >= config.MaxCoins {
-		symbolsGo = append(symbolsGo, target1[:config.MaxCoins]...)
+		symbolsNet = append(symbolsNet, target1[:config.MaxCoins]...)
 	} else {
-		return symbolsGo, fmt.Errorf("数据量不足")
+		return symbolsNet, fmt.Errorf("数据量不足")
 	}
 	target2 := make([]FundData, 0)
 
-	for _, s := range symbolsGo {
+	for _, s := range symbolsNet {
 		if s.Side && s.M5Net > config.BuyNetAmount || !s.Side && s.M5Net < -config.SideNetAmount {
 			target2 = append(target2, s)
 		}
@@ -279,8 +285,47 @@ func getTopAndBottomM5Net(data []FundData) (symbolsGo []FundData, err error) {
 	return target2, nil
 }
 
-// 取book 价格
-func getBookPrice(symbol FundData, i int) (float64 error) {
+// 筛选币种
+func filterSymbols(symbols []FundData) ([]FundData, error) {
+	target := make([]FundData, 0)
+	for _, s := range symbols {
+		klines, err := client.NewKlinesService().Symbol(s.Coin + "USDT").
+			Interval("5m").Limit(201).Do(context.Background())
+		if err != nil {
+			fmt.Println(err)
+			return nil, err
+		}
+		closedPrices := make([]float64, 0, len(klines))
+		for _, kline := range klines[:len(klines)] {
+			closeFloat, err := strconv.ParseFloat(kline.Close, 64)
+			if err != nil {
+				log.Println(err)
+				return nil, err
+			}
+			closedPrices = append(closedPrices, closeFloat) // 将每个 K 线的 Close 值添加到切片中
+		}
+		rsi := RSI(closedPrices, 6)
+		crsi := CRSI(closedPrices, 6)
+		// log.Println(s.Coin, s.Side, closedPrices[200], rsi[200], crsi[200])
+		if s.Side && crsi[200] < config.RsiLevel || !s.Side && crsi[200] > (100-config.RsiLevel) {
+			log.Println("["+s.Coin+"] 符合要求 | ", closedPrices[200], rsi[200], crsi[200])
+			target = append(target, s)
+		}
+	}
 
-	return
+	return target, nil
 }
+
+// 筛选持仓
+// func HoldOrder(s []FundData) ([]FundData, error) {
+// 	account, err := client.NewGetAccountService().Do(context.Background())
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	// 输出账户中的所有资产信息
+// 	for _, asset := range account.Positions {
+// 		if asset.PositionAmt != "0" {
+
+// 		}
+// 	}
+// }
