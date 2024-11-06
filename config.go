@@ -16,6 +16,7 @@ type Config struct {
 	MaxCoins      int      `json:"maxCoins"`      // 前几个币种
 	PriceDepth    int      `json:"priceDepth"`    // orderBook挂单位置
 	RsiLevel      float64  `json:"rsiLevel"`      // RSI 标准值
+	RsiLength     int      `json:"rsiLength"`     // RSI 长度
 	Amount        float64  `json:"amount"`        // 挂单金额
 	BuyNetAmount  float64  `json:"buyNetAmount"`  // 多单挂单量
 	SideNetAmount float64  `json:"sideNetAmount"` // 空单挂单量

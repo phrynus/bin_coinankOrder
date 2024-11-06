@@ -56,7 +56,12 @@ func main() {
 		fmt.Println("Error opening log file:", err)
 		return
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(file)
 
 	multiWriter := io.MultiWriter(file, os.Stdout)
 
@@ -77,7 +82,10 @@ func main() {
 	client.HTTPClient = httpClient
 	binance.SetWsProxyUrl(config.Proxy)
 	// 时间偏移
-	client.NewSetServerTimeService().Do(context.Background())
+	_, err = client.NewSetServerTimeService().Do(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
 	// 获取交易信息
 	info, err := client.NewExchangeInfoService().Do(context.Background())
 	if err != nil {
@@ -99,7 +107,12 @@ func main() {
 	log.Println("[CoinankGo] 开始")
 	go func() {
 		for {
-			go CoinankGo()
+			go func() {
+				err := CoinankGo()
+				if err != nil {
+					log.Println(err)
+				}
+			}()
 			// 等待 s时间
 			time.Sleep(time.Duration(config.Duration) * time.Second)
 		}
@@ -110,7 +123,7 @@ func main() {
 
 // 初始化
 
-// Coinank开始
+// CoinankGo Coinank开始
 func CoinankGo() error {
 	// if err := isAccount(); err != nil {
 	// 	log.Println(err)
@@ -201,7 +214,12 @@ func fetchFundCoinankData() ([]FundData, error) {
 		log.Printf("请求失败: %v", err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(resp.Body)
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
@@ -290,7 +308,7 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 	target := make([]FundData, 0)
 	for _, s := range symbols {
 		klines, err := client.NewKlinesService().Symbol(s.Coin + "USDT").
-			Interval("5m").Limit(201).Do(context.Background())
+			Interval("1m").Limit(201).Do(context.Background())
 		if err != nil {
 			fmt.Println(err)
 			return nil, err
@@ -304,11 +322,11 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 			}
 			closedPrices = append(closedPrices, closeFloat) // 将每个 K 线的 Close 值添加到切片中
 		}
-		rsi := RSI(closedPrices, 6)
-		crsi := CRSI(closedPrices, 6)
+		//rsi := RSI(closedPrices, 6)
+		crsi := CRSI(closedPrices, config.RsiLength)
 		// log.Println(s.Coin, s.Side, closedPrices[200], rsi[200], crsi[200])
 		if s.Side && crsi[200] < config.RsiLevel || !s.Side && crsi[200] > (100-config.RsiLevel) {
-			log.Println("["+s.Coin+"] 符合要求 | ", closedPrices[200], rsi[200], crsi[200])
+			log.Println("["+s.Coin+"] 符合要求 | ", closedPrices[200], crsi[200])
 			target = append(target, s)
 		}
 	}
