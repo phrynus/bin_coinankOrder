@@ -13,7 +13,7 @@ type Config struct {
 	ApiSecret         string   `json:"apiSecret"`
 	Proxy             string   `json:"proxy"`
 	Timeout           int      `json:"timeout"`           // 网络超时
-	Duration          int      `json:"duration"`          // 挂单超时 s
+	Duration          int      `json:"duration"`          // 循环时间 s
 	MaxCoins          int      `json:"maxCoins"`          // 前几个币种
 	PriceDepth        int      `json:"priceDepth"`        // orderBook挂单位置
 	RsiLength         int      `json:"rsiLength"`         // RSI 长度

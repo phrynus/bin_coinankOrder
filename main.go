@@ -184,7 +184,7 @@ func CoinankGo() error {
 	}
 	// log.Println(symbolsFilter)
 	if len(symbolsFilter) < 1 {
-		log.Println("空")
+		log.Println("----------")
 	}
 
 	return nil
@@ -358,22 +358,22 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 		crsi := CRSI(closedPrices, config.RsiLength)
 		// fmt.Println(s.Coin, s.Side, closedPrices[200], crsi[200])
 		if s.Side && crsi[200] < config.RsiLevel && s.M5Net > config.BuyNetAmount {
-			log.Println("["+s.Coin+"][多][RSI] | 价格:", closedPrices[200], " RSI:", crsi[200], " Coinan:", s)
+			log.Println("["+s.Coin+"][多][RSI] | 价格:", closedPrices[200], " RSI:", crsi[200])
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && crsi[200] > (100-config.RsiLevel) && s.M5Net < -config.SideNetAmount {
-			log.Println("["+s.Coin+"][空][RSI] | 价格:", closedPrices[200], " RSI:", crsi[200], " Coinan:", s)
+			log.Println("["+s.Coin+"][空][RSI] | 价格:", closedPrices[200], " RSI:", crsi[200])
 			target = append(target, s)
 			continue
 		}
 		if s.Side && s.M5Net > config.BuyNetAmount && s.M15Net > 1 && s.M15Net > (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][多][量级] | 价格:", closedPrices[200], " RSI:", crsi[200], " Coinan:", s)
+			log.Println("["+s.Coin+"][多][量级] | 价格:", closedPrices[200], " RSI:", crsi[200])
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && s.M5Net < -config.SideNetAmount && s.M15Net < 1 && s.M15Net < (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][空][量级] | 价格:", closedPrices[200], " RSI:", crsi[200], " Coinan:", s)
+			log.Println("["+s.Coin+"][空][量级] | 价格:", closedPrices[200], " RSI:", crsi[200])
 			target = append(target, s)
 			continue
 		}
