@@ -144,6 +144,16 @@ func main() {
 			time.Sleep(time.Duration(config.Duration) * time.Second)
 		}
 	}()
+	go func() {
+		for {
+			// 时间偏移
+			time.Sleep(300 * time.Second)
+			_, err = client.NewSetServerTimeService().Do(context.Background())
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+	}()
 	//
 	select {}
 }
