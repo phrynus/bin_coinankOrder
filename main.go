@@ -321,15 +321,8 @@ func getTopAndBottomM5Net(data []FundData) (symbolsNet []FundData, err error) {
 	} else {
 		return symbolsNet, fmt.Errorf("数据量不足")
 	}
-	target2 := make([]FundData, 0)
 
-	for _, s := range symbolsNet {
-		if s.Side && s.M5Net > config.BuyNetAmount || !s.Side && s.M5Net < -config.SideNetAmount {
-			target2 = append(target2, s)
-		}
-	}
-
-	return target2, nil
+	return symbolsNet, nil
 }
 
 // 筛选币种

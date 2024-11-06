@@ -21,7 +21,7 @@ type Config struct {
 	Amount            float64  `json:"amount"`            // 挂单金额
 	BuyNetAmount      float64  `json:"buyNetAmount"`      // 多单挂单量
 	SideNetAmount     float64  `json:"sideNetAmount"`     // 空单挂单量
-	MultipleNetAmount float64  `json:"multipleNetAmount"` // 空单挂单量
+	MultipleNetAmount float64  `json:"multipleNetAmount"` // 挂单量倍数
 	Blacklist         []string `json:"blacklist"`         // 黑名单
 }
 
