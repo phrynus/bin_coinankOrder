@@ -3,11 +3,12 @@
   "apiSecret": "",
   "proxy": "http://127.0.0.1:7890",
   "amount": 50,
+  "maxCoins": 5,
   "rsiLevel": 40,
-  "duration": 30,
-  "maxCoins": 10,
-  "priceDepth": 20,
-  "buyNetAmount": 500000,
-  "sideNetAmount": 500000,
+  "duration": 20,
+  "rsiLength": 6,
+  "priceDepth": 5,
+  "buyNetAmount": 1000000,
+  "sideNetAmount": 1000000,
   "blacklist": ["BTC", "ETH", "SOL"]
 }

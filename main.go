@@ -68,19 +68,46 @@ func main() {
 	log.SetFlags(log.LstdFlags) // 清除默认的时间标志
 	log.SetOutput(multiWriter)
 
-	_proxy, _ := url.Parse(config.Proxy)
-	// tr =
-	httpClient = &http.Client{
-		Transport: &http.Transport{
-			Proxy:           http.ProxyURL(_proxy),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-		Timeout: time.Second * 5,
+	client = binance.NewFuturesClient(config.ApiKey, config.ApiSecret)
+
+	httpClient = &http.Client{}
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
-	client = binance.NewFuturesClient(config.ApiKey, config.ApiSecret)
+	if config.Proxy != "" {
+		proxyURL, err := url.Parse(config.Proxy)
+		if err != nil {
+			log.Fatalf("无效的代理地址: %v", err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+		binance.SetWsProxyUrl(config.Proxy)
+		fmt.Println("代理已连接 - 网络判断")
+	} else {
+		fmt.Println("无代理 - 网络判断")
+	}
+
+	timeout := 360 // 默认超时时间
+	if config.Timeout != 0 {
+		timeout = config.Timeout
+	}
+	httpClient = &http.Client{
+		Transport: transport,
+		Timeout:   time.Second * time.Duration(timeout),
+	}
+
 	client.HTTPClient = httpClient
-	binance.SetWsProxyUrl(config.Proxy)
+	if checkConnection("https://coinank.com/api/fund/fundReal?page=1&size=50&type=1&productType=SWAP&sortBy=&baseCoin=&isFollow=false") {
+		fmt.Println("Coinank连接正常")
+	} else {
+		log.Fatal("无法连接到Coinank")
+	}
+	if checkConnection("https://fapi.binance.com/fapi/v1/time") {
+		fmt.Println("Binance连接正常")
+	} else {
+		log.Fatal("无法连接到Binance")
+	}
+
 	// 时间偏移
 	_, err = client.NewSetServerTimeService().Do(context.Background())
 	if err != nil {
@@ -146,7 +173,9 @@ func CoinankGo() error {
 		return nil
 	}
 	// log.Println(symbolsFilter)
-	fmt.Println(symbolsFilter)
+	if len(symbolsFilter) < 1 {
+		log.Println("空")
+	}
 
 	return nil
 }
@@ -203,7 +232,7 @@ func contains(slice []string, item string) bool {
 func fetchFundCoinankData() ([]FundData, error) {
 	req, err := http.NewRequest("POST", "https://coinank.com/api/fund/fundReal?page=1&size=50&type=1&productType=SWAP&sortBy=&baseCoin=&isFollow=false", nil)
 	if err != nil {
-		log.Printf("创建请求失败: %v", err)
+		// log.Printf("创建请求失败: %v", err)
 		return nil, err
 	}
 	req.Header.Add("coinank-apikey", getKey())
@@ -211,7 +240,7 @@ func fetchFundCoinankData() ([]FundData, error) {
 	// 发送请求
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("请求失败: %v", err)
+		// log.Printf("请求失败: %v", err)
 		return nil, err
 	}
 	defer func(Body io.ReadCloser) {
@@ -229,7 +258,7 @@ func fetchFundCoinankData() ([]FundData, error) {
 	// 解析响应
 	var responseData map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
-		log.Printf("解析响应失败: %v", err)
+		// log.Printf("解析响应失败: %v", err)
 		return nil, err
 	}
 
@@ -324,14 +353,62 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 		}
 		//rsi := RSI(closedPrices, 6)
 		crsi := CRSI(closedPrices, config.RsiLength)
-		// log.Println(s.Coin, s.Side, closedPrices[200], rsi[200], crsi[200])
-		if s.Side && crsi[200] < config.RsiLevel || !s.Side && crsi[200] > (100-config.RsiLevel) {
-			log.Println("["+s.Coin+"] 符合要求 | ", closedPrices[200], crsi[200])
+		// fmt.Println(s.Coin, s.Side, closedPrices[200], crsi[200])
+		if s.Side && crsi[200] < config.RsiLevel {
+			log.Println("["+s.Coin+"] 符合要求 多 RSI | ", closedPrices[200], crsi[200], s)
 			target = append(target, s)
+			continue
+		}
+		if !s.Side && crsi[200] > (100-config.RsiLevel) {
+			log.Println("["+s.Coin+"] 符合要求 空 RSI | ", closedPrices[200], crsi[200], s)
+			target = append(target, s)
+			continue
+		}
+		if s.Side && s.M5Net > config.BuyNetAmount && s.M15Net > 1 && s.M15Net > (s.M5Net*config.MultipleNetAmount) {
+			log.Println("["+s.Coin+"] 符合要求 多 量 | ", closedPrices[200], crsi[200], s)
+			target = append(target, s)
+			continue
+		}
+		if !s.Side && s.M5Net < -config.SideNetAmount && s.M15Net < 1 && s.M15Net < (s.M5Net*config.MultipleNetAmount) {
+			log.Println("["+s.Coin+"] 符合要求 空 量 | ", closedPrices[200], crsi[200], s)
+			target = append(target, s)
+			continue
 		}
 	}
 
 	return target, nil
+}
+
+func checkConnection(url string) bool {
+	// 检查 URL 是否正确
+	if url == "" {
+		fmt.Println("URL 不能为空")
+		return false
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("创建请求失败: %v", err)
+		return false
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Println("无法连接到", url, "错误:", err)
+		return false
+	}
+	// 确保 resp 不为 nil 再调用 Close()
+	defer func() {
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}()
+	if resp.StatusCode == http.StatusOK {
+		return true
+	}
+
+	fmt.Println("连接到", url, "失败，状态码:", resp.StatusCode)
+	return false
 }
 
 // 筛选持仓
