@@ -36,6 +36,8 @@ var symbolsString []string
 
 var httpClient *http.Client
 
+var infoData *futures.ExchangeInfo
+
 func main() {
 	fmt.Printf("Go version: %s\n", runtime.Version())
 
@@ -118,6 +120,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	infoData = info
 	// 赛选币种
 	for _, s := range info.Symbols {
 		if s.QuoteAsset == "USDT" && s.ContractType == "PERPETUAL" && s.Status == "TRADING" && !contains(config.Blacklist, s.BaseAsset) {
@@ -132,6 +135,7 @@ func main() {
 	//time.Sleep(duration)
 
 	log.Println("[Go] 开始")
+
 	go func() {
 		for {
 			go func() {
@@ -163,10 +167,10 @@ func main() {
 // CoinankGo Coinank开始
 func CoinankGo() error {
 
-	if err := isAccount(); err != nil {
-		log.Println(err)
-		return nil
-	}
+	// if err := isAccount(); err != nil {
+	// 	log.Println(err)
+	// 	return nil
+	// }
 	//
 	//coinank, err := fetchFundCoinankData()
 	//if err != nil {
@@ -192,7 +196,7 @@ func CoinankGo() error {
 }
 
 // 判断账户
-func isAccount() error {
+func isAccount(symbols []FundData) error {
 	// 账户信息
 	account, err := client.NewGetAccountService().Do(context.Background())
 	if err != nil {
@@ -219,7 +223,66 @@ func isAccount() error {
 		return fmt.Errorf("已使用超过资金的50%")
 	}
 
-	//
+	// 挂单
+	openOrders, err := client.NewListOpenOrdersService().Do(context.Background())
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	for _, order := range openOrders {
+		jsonData, err := json.Marshal(order)
+		if err != nil {
+			fmt.Println("JSON marshaling error:", err)
+			return err
+		}
+		fmt.Println(string(jsonData))
+		getSymbol, err := getSymbolsFundData(symbols, order.Symbol)
+		if err != nil {
+			log.Panicln("没有持有当前币种挂单", getSymbol.Coin, order)
+
+			// continue
+		}
+		log.Panicln("持有当前币种挂单", getSymbol.Coin, order)
+
+		// 判断UpdateTime 更新时间是否过期10分钟
+		updateTime, err := strconv.ParseInt(string(order.UpdateTime), 10, 64)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		now := time.Now().UnixMilli()
+
+		if getSymbol.Side && order.PositionSide == "SHORT" {
+			// 反转 修改订单 空转多
+			err := cancelOrder(order.Symbol, order.OrderID)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			_, err = client.NewCreateOrderService().Symbol(order.Symbol).Type("LIMIT").Price(order.Price).Side("BUY").PositionSide("LONG").Quantity(order.OrigQuantity).TimeInForce("GTC").Do(context.Background())
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+
+		} else if !getSymbol.Side && order.PositionSide == "LONG" {
+			// 反转 多转空
+			err := cancelOrder(order.Symbol, order.OrderID)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+		} else if now-updateTime > 600000 {
+			err := cancelOrder(order.Symbol, order.OrderID)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+		}
+
+	}
+
+	// 持有
 	for _, asset := range account.Positions {
 		PositionAmt, err := strconv.ParseFloat(asset.PositionAmt, 64)
 		if err != nil {
@@ -239,6 +302,75 @@ func isAccount() error {
 
 	fmt.Println("ok")
 	return nil
+}
+
+// 下单
+func placeOrder(symbol string, side string, positionSide string) error {
+
+	// 取订单铺
+	book, ree := client.NewDepthService().Symbol(symbol).Limit(config.PriceDepth + 1).Do(context.Background())
+	if ree != nil {
+		log.Println(ree)
+		return ree
+	}
+	var prices float64
+	if side == "BUY" {
+		price, err := strconv.ParseFloat(book.Bids[config.PriceDepth-1].Price, 64)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		prices = price
+	} else {
+		price, err := strconv.ParseFloat(book.Asks[config.PriceDepth-1].Price, 64)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		prices = price
+	}
+	log.Println(prices)
+	// 根据  prices 和cconfig.amount 计算出数量
+	amount := config.Amount / prices
+	// infoData 取到币种信息 设置数量和价格小数位
+	infoDataSymbols, err := getInfoSymbolsFundData(infoData, symbol)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	fmt.Println(infoDataSymbols.Filters)
+
+	return nil
+}
+
+// 取消订单
+func cancelOrder(symbol string, orderId int64) error {
+	_, err := client.NewCancelOrderService().Symbol(symbol).OrderID(orderId).Do(context.Background())
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	return nil
+}
+
+// 取得InfoSymbo币种数据
+func getInfoSymbolsFundData(symbols *futures.ExchangeInfo, symbolName string) (getSymbol futures.Symbol, err error) {
+	for _, s := range symbols.Symbols {
+		if s.Symbol == symbolName {
+			return s, nil
+		}
+	}
+	return getSymbol, fmt.Errorf("没有找到%s", symbolName)
+}
+
+// 取得币种数据
+func getSymbolsFundData(symbols []FundData, symbolName string) (getSymbol FundData, err error) {
+	for _, s := range symbols {
+		if s.Coin == symbolName {
+			return s, nil
+		}
+	}
+	return getSymbol, fmt.Errorf("没有找到%s", symbolName)
 }
 
 // Coinank-Apikey 获取
@@ -435,17 +567,3 @@ func checkConnection(url string) bool {
 	fmt.Println("连接到", url, "失败，状态码:", resp.StatusCode)
 	return false
 }
-
-// 筛选持仓
-// func HoldOrder(s []FundData) ([]FundData, error) {
-// 	account, err := client.NewGetAccountService().Do(context.Background())
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// 	// 输出账户中的所有资产信息
-// 	for _, asset := range account.Positions {
-// 		if asset.PositionAmt != "0" {
-
-// 		}
-// 	}
-// }
