@@ -126,12 +126,12 @@ func main() {
 		}
 	}
 
-	now := time.Now()
-	nextMinute := now.Truncate(time.Minute).Add(time.Minute)
-	duration := nextMinute.Sub(now)
-	time.Sleep(duration)
+	//now := time.Now()
+	//nextMinute := now.Truncate(time.Minute).Add(time.Minute)
+	//duration := nextMinute.Sub(now)
+	//time.Sleep(duration)
 
-	log.Println("[CoinankGo] 开始")
+	log.Println("[Go] 开始")
 	go func() {
 		for {
 			go func() {
@@ -162,35 +162,36 @@ func main() {
 
 // CoinankGo Coinank开始
 func CoinankGo() error {
-	// if err := isAccount(); err != nil {
-	// 	log.Println(err)
-	// 	return nil
-	// }
 
-	coinank, err := fetchFundCoinankData()
-	if err != nil {
+	if err := isAccount(); err != nil {
 		log.Println(err)
 		return nil
 	}
-	symbolsNet, err := getTopAndBottomM5Net(coinank)
-	if err != nil {
-		log.Println(err)
-		return nil
-	}
-	symbolsFilter, err := filterSymbols(symbolsNet)
-	if err != nil {
-		log.Println(err)
-		return nil
-	}
-	// log.Println(symbolsFilter)
-	if len(symbolsFilter) < 1 {
-		log.Println("----------")
-	}
+	//
+	//coinank, err := fetchFundCoinankData()
+	//if err != nil {
+	//	log.Println(err)
+	//	return nil
+	//}
+	//symbolsNet, err := getTopAndBottomM5Net(coinank)
+	//if err != nil {
+	//	log.Println(err)
+	//	return nil
+	//}
+	//symbolsFilter, err := filterSymbols(symbolsNet)
+	//if err != nil {
+	//	log.Println(err)
+	//	return nil
+	//}
+	//// log.Println(symbolsFilter)
+	//if len(symbolsFilter) < 1 {
+	//	log.Println("----------")
+	//}
 
 	return nil
 }
 
-// 判断账户是否有资格
+// 判断账户
 func isAccount() error {
 	// 账户信息
 	account, err := client.NewGetAccountService().Do(context.Background())
@@ -217,6 +218,26 @@ func isAccount() error {
 	if usedBalance > totalWalletBalance*0.5 || totalWalletBalance == 0 {
 		return fmt.Errorf("已使用超过资金的50%")
 	}
+
+	//
+	for _, asset := range account.Positions {
+		PositionAmt, err := strconv.ParseFloat(asset.PositionAmt, 64)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		if PositionAmt > 0 {
+			sonData, err := json.Marshal(asset)
+			if err != nil {
+				fmt.Println("JSON marshaling error:", err)
+				return err
+			}
+			fmt.Println(asset.Symbol, asset.PositionAmt, string(sonData))
+
+		}
+	}
+
+	fmt.Println("ok")
 	return nil
 }
 
@@ -357,23 +378,24 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 		//rsi := RSI(closedPrices, 6)
 		crsi := CRSI(closedPrices, config.RsiLength)
 		// fmt.Println(s.Coin, s.Side, closedPrices[200], crsi[200])
+		src200 := fmt.Sprintf("%.2f", crsi[200])
 		if s.Side && crsi[200] < config.RsiLevel && s.M5Net > config.BuyNetAmount {
-			log.Println("["+s.Coin+"][多][RSI] | 价格:", closedPrices[200], " RSI:", crsi[200])
+			log.Println("["+s.Coin+"][多][RSI] | 价格:", closedPrices[200], " RSI:", src200, s)
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && crsi[200] > (100-config.RsiLevel) && s.M5Net < -config.SideNetAmount {
-			log.Println("["+s.Coin+"][空][RSI] | 价格:", closedPrices[200], " RSI:", crsi[200])
+			log.Println("["+s.Coin+"][空][RSI] | 价格:", closedPrices[200], " RSI:", src200, s)
 			target = append(target, s)
 			continue
 		}
 		if s.Side && s.M5Net > config.BuyNetAmount && s.M15Net > 1 && s.M15Net > (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][多][量级] | 价格:", closedPrices[200], " RSI:", crsi[200])
+			log.Println("["+s.Coin+"][多][量级] | 价格:", closedPrices[200], " RSI:", src200, s)
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && s.M5Net < -config.SideNetAmount && s.M15Net < 1 && s.M15Net < (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][空][量级] | 价格:", closedPrices[200], " RSI:", crsi[200])
+			log.Println("["+s.Coin+"][空][量级] | 价格:", closedPrices[200], " RSI:", src200, s)
 			target = append(target, s)
 			continue
 		}
