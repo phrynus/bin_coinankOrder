@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/adshao/go-binance/v2"
@@ -80,13 +81,13 @@ func main() {
 	if config.Proxy != "" {
 		proxyURL, err := url.Parse(config.Proxy)
 		if err != nil {
-			log.Fatalf("无效的代理地址: %v", err)
+			log.Fatalf("Invalid: %v", err)
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 		binance.SetWsProxyUrl(config.Proxy)
-		fmt.Println("代理已连接 - 网络判断")
+		fmt.Println("Use Proxy")
 	} else {
-		fmt.Println("无代理 - 网络判断")
+		fmt.Println("No Proxy")
 	}
 
 	timeout := 360 // 默认超时时间
@@ -100,14 +101,14 @@ func main() {
 
 	client.HTTPClient = httpClient
 	if checkConnection("https://coinank.com/api/fund/fundReal?page=1&size=50&type=1&productType=SWAP&sortBy=&baseCoin=&isFollow=false") {
-		fmt.Println("Coinank连接正常")
+		fmt.Println("Coinank OK")
 	} else {
-		log.Fatal("无法连接到Coinank")
+		log.Fatal("Connection failed Coinank")
 	}
 	if checkConnection("https://fapi.binance.com/fapi/v1/time") {
-		fmt.Println("Binance连接正常")
+		fmt.Println("Binance OK")
 	} else {
-		log.Fatal("无法连接到Binance")
+		log.Fatal("Connection failed Binance")
 	}
 
 	// 时间偏移
@@ -129,12 +130,12 @@ func main() {
 		}
 	}
 
-	//now := time.Now()
-	//nextMinute := now.Truncate(time.Minute).Add(time.Minute)
-	//duration := nextMinute.Sub(now)
-	//time.Sleep(duration)
+	now := time.Now()
+	nextMinute := now.Truncate(time.Minute).Add(time.Minute)
+	duration := nextMinute.Sub(now)
+	time.Sleep(duration)
 
-	log.Println("[Go] 开始")
+	// log.Println("[Go] 开始")
 
 	go func() {
 		for {
@@ -162,172 +163,207 @@ func main() {
 	select {}
 }
 
-// 初始化
-
-// CoinankGo Coinank开始
+// 开始
 func CoinankGo() error {
 
-	// if err := isAccount(); err != nil {
-	// 	log.Println(err)
-	// 	return nil
-	// }
-	//
-	//coinank, err := fetchFundCoinankData()
-	//if err != nil {
-	//	log.Println(err)
-	//	return nil
-	//}
-	//symbolsNet, err := getTopAndBottomM5Net(coinank)
-	//if err != nil {
-	//	log.Println(err)
-	//	return nil
-	//}
-	//symbolsFilter, err := filterSymbols(symbolsNet)
-	//if err != nil {
-	//	log.Println(err)
-	//	return nil
-	//}
-	//// log.Println(symbolsFilter)
-	//if len(symbolsFilter) < 1 {
-	//	log.Println("----------")
-	//}
+	coinank, err := fetchFundCoinankData()
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	symbolsNet, err := getTopAndBottomM5Net(coinank)
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	symbolsFilter, err := filterSymbols(symbolsNet)
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	// log.Println(symbolsFilter)
+	if len(symbolsFilter) > 0 {
 
+		OpenSymbols, err := ordersAccount(symbolsFilter)
+		if err != nil {
+			log.Println(err)
+			return nil
+		}
+		// log.Panicln(OpenSymbols)
+		err = ordersOrders(OpenSymbols)
+		if err != nil {
+			log.Println(err)
+			return nil
+		}
+
+	}
+	log.Println("----------")
 	return nil
 }
 
-// 判断账户
-func isAccount(symbols []FundData) error {
+// 处理已有订单
+func ordersAccount(symbols []FundData) (OpenSymbols []FundData, err error) {
 	// 账户信息
 	account, err := client.NewGetAccountService().Do(context.Background())
 	if err != nil {
 		log.Println(err)
-		return err
+		return nil, err
 	}
 	// 账户的总钱包余额，表示可用余额。
 	totalWalletBalance, err := strconv.ParseFloat(account.TotalWalletBalance, 64)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// 总保证金余额，表示账户中可用的保证金总额。
 	totalPositionInitialMargin, err := strconv.ParseFloat(account.TotalPositionInitialMargin, 64)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	totalOpenOrderInitialMargin, err := strconv.ParseFloat(account.TotalOpenOrderInitialMargin, 64)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// 计算已用余额
 	usedBalance := totalPositionInitialMargin + totalOpenOrderInitialMargin
 	if usedBalance > totalWalletBalance*0.5 || totalWalletBalance == 0 {
-		return fmt.Errorf("已使用超过资金的50%")
+		return nil, fmt.Errorf("Use more than 50%")
 	}
 
+	for _, symbol := range symbols {
+		asset, err := getAccountPositionSymbolsFundData(account.Positions, symbol)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		PositionAmt, err := strconv.ParseFloat(asset.PositionAmt, 64)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		if PositionAmt == 0 {
+			log.Println(symbol.Coin, "NO POSITION")
+			// 去挂单
+			OpenSymbols = append(OpenSymbols, symbol)
+		}
+	}
+
+	return OpenSymbols, nil
+}
+
+// 处理挂单
+func ordersOrders(symbols []FundData) error {
 	// 挂单
 	openOrders, err := client.NewListOpenOrdersService().Do(context.Background())
 	if err != nil {
 		log.Println(err)
 		return err
 	}
+	// 收集已取消的挂单
+	// 取消超时订单
 	for _, order := range openOrders {
-		jsonData, err := json.Marshal(order)
-		if err != nil {
-			fmt.Println("JSON marshaling error:", err)
-			return err
+		// 取订单时间
+		now := time.Now().UnixMilli()
+		if now-order.UpdateTime > 600000 {
+			// 判断UpdateTime 更新时间是否过期10分钟
+			log.Println(order.Symbol, "Expired")
+			err := cancelOrder(order.Symbol, order.OrderID)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			// 删除 openOrders 里面的 order
+			for i, v := range openOrders {
+				if v.OrderID != order.OrderID {
+					openOrders = append(openOrders[:i], openOrders[i+1:]...)
+				}
+			}
 		}
-		fmt.Println(string(jsonData))
-		getSymbol, err := getSymbolsFundData(symbols, order.Symbol)
-		if err != nil {
-			log.Panicln("没有持有当前币种挂单", getSymbol.Coin, order)
 
-			// continue
-		}
-		log.Panicln("持有当前币种挂单", getSymbol.Coin, order)
-
-		// 判断UpdateTime 更新时间是否过期10分钟
-		updateTime, err := strconv.ParseInt(string(order.UpdateTime), 10, 64)
+	}
+	// 开始挂单
+	for _, symbol := range symbols {
+		order, err := getOrderSymbolsFundData(openOrders, symbol.Coin+"USDT")
 		if err != nil {
-			log.Println(err)
+			log.Println(symbol.Coin, "Order")
+			if symbol.Side {
+				err = placeOrder(symbol.Coin+"USDT", "BUY", "LONG", true)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+			} else {
+				err = placeOrder(symbol.Coin+"USDT", "SELL", "SHORT", true)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+			}
 			continue
 		}
-		now := time.Now().UnixMilli()
-
-		if getSymbol.Side && order.PositionSide == "SHORT" {
+		// 反转
+		if symbol.Side && order.PositionSide == "SHORT" {
 			// 反转 修改订单 空转多
 			err := cancelOrder(order.Symbol, order.OrderID)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			_, err = client.NewCreateOrderService().Symbol(order.Symbol).Type("LIMIT").Price(order.Price).Side("BUY").PositionSide("LONG").Quantity(order.OrigQuantity).TimeInForce("GTC").Do(context.Background())
+			err = placeOrder(order.Symbol, "BUY", "LONG", true)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-
-		} else if !getSymbol.Side && order.PositionSide == "LONG" {
+			continue
+		} else if !symbol.Side && order.PositionSide == "LONG" {
 			// 反转 多转空
 			err := cancelOrder(order.Symbol, order.OrderID)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-		} else if now-updateTime > 600000 {
-			err := cancelOrder(order.Symbol, order.OrderID)
+			err = placeOrder(order.Symbol, "SELL", "SHORT", true)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-		}
-
-	}
-
-	// 持有
-	for _, asset := range account.Positions {
-		PositionAmt, err := strconv.ParseFloat(asset.PositionAmt, 64)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-		if PositionAmt > 0 {
-			sonData, err := json.Marshal(asset)
-			if err != nil {
-				fmt.Println("JSON marshaling error:", err)
-				return err
-			}
-			fmt.Println(asset.Symbol, asset.PositionAmt, string(sonData))
-
+			continue
 		}
 	}
 
-	fmt.Println("ok")
 	return nil
 }
 
 // 下单
-func placeOrder(symbol string, side string, positionSide string) error {
-
+func placeOrder(symbol string, side futures.SideType, positionSide futures.PositionSideType, isBokk bool) error {
 	// 取订单铺
-	book, ree := client.NewDepthService().Symbol(symbol).Limit(config.PriceDepth + 1).Do(context.Background())
+	book, ree := client.NewDepthService().Symbol(symbol).Limit(50).Do(context.Background())
 	if ree != nil {
 		log.Println(ree)
 		return ree
 	}
-	var prices float64
-	if side == "BUY" {
-		price, err := strconv.ParseFloat(book.Bids[config.PriceDepth-1].Price, 64)
-		if err != nil {
-			log.Println(err)
-			return err
+	var price string
+
+	if side == "BUY" && positionSide == "LONG" {
+		price = book.Bids[config.PriceDepth-1].Price
+	} else if side == "SELL" && positionSide == "LONG" {
+		price = book.Asks[config.PriceDepth-1].Price
+		if !isBokk {
+			price = book.Bids[0].Price
 		}
-		prices = price
-	} else {
-		price, err := strconv.ParseFloat(book.Asks[config.PriceDepth-1].Price, 64)
-		if err != nil {
-			log.Println(err)
-			return err
+	} else if side == "BUY" && positionSide == "SHORT" {
+		price = book.Bids[config.PriceDepth-1].Price
+		if !isBokk {
+			price = book.Bids[0].Price
 		}
-		prices = price
+	} else if side == "SELL" && positionSide == "SHORT" {
+		price = book.Asks[config.PriceDepth-1].Price
+
+	}
+
+	prices, err := strconv.ParseFloat(price, 64)
+	if err != nil {
+		log.Println(err)
+		return err
 	}
 	log.Println(prices)
 	// 根据  prices 和cconfig.amount 计算出数量
@@ -338,7 +374,19 @@ func placeOrder(symbol string, side string, positionSide string) error {
 		log.Println(err)
 		return err
 	}
-	fmt.Println(infoDataSymbols.Filters)
+
+	amountStr, err := takeDivisible(amount, infoDataSymbols.Filters[1]["stepSize"].(string))
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	pricesStr := strconv.FormatFloat(prices, 'f', -1, 64)
+
+	_, err = client.NewCreateOrderService().Symbol(symbol).Type("LIMIT").Price(pricesStr).Side(side).PositionSide(positionSide).Quantity(amountStr).TimeInForce("GTC").Do(context.Background())
+	if err != nil {
+		log.Println(err)
+		return err
+	}
 
 	return nil
 }
@@ -353,10 +401,59 @@ func cancelOrder(symbol string, orderId int64) error {
 	return nil
 }
 
+// 调整小数位数并确保可以整除
+func takeDivisible(inputVal float64, divisor string) (string, error) {
+
+	divisorVal, err := strconv.ParseFloat(divisor, 64)
+	if err != nil || divisorVal == 0 {
+		return "", fmt.Errorf("无效的 divisor: %v", err)
+	}
+
+	// 计算小数点位数
+	decimalPlaces := 0
+	if dot := strings.Index(divisor, "."); dot != -1 {
+		decimalPlaces = len(divisor) - dot - 1
+	}
+
+	// 计算最大整除的值
+	quotient := int(inputVal / divisorVal)
+	maxDivisible := divisorVal * float64(quotient)
+
+	// 格式化输出
+	format := fmt.Sprintf("%%.%df", decimalPlaces)
+	return fmt.Sprintf(format, maxDivisible), nil
+}
+
 // 取得InfoSymbo币种数据
 func getInfoSymbolsFundData(symbols *futures.ExchangeInfo, symbolName string) (getSymbol futures.Symbol, err error) {
 	for _, s := range symbols.Symbols {
 		if s.Symbol == symbolName {
+			return s, nil
+		}
+	}
+	return getSymbol, fmt.Errorf("没有找到%s", symbolName)
+}
+
+// 取得当前挂单的币种信息
+func getOrderSymbolsFundData(symbols []*futures.Order, symbolName string) (getSymbol *futures.Order, err error) {
+	for _, s := range symbols {
+		if s.Symbol == symbolName {
+			return s, nil
+		}
+	}
+	return getSymbol, fmt.Errorf("没有找到%s", symbolName)
+}
+
+// 取得当前仓位的币种信息
+func getAccountPositionSymbolsFundData(symbols []*futures.AccountPosition, symbolName FundData) (getSymbol *futures.AccountPosition, err error) {
+	var side futures.PositionSideType
+	if symbolName.Side {
+		side = "LONG"
+	} else {
+		side = "SHORT"
+	}
+	for _, s := range symbols {
+		if s.Symbol == symbolName.Coin+"USDT" && s.PositionSide == side {
 			return s, nil
 		}
 	}
@@ -512,22 +609,22 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 		// fmt.Println(s.Coin, s.Side, closedPrices[200], crsi[200])
 		src200 := fmt.Sprintf("%.2f", crsi[200])
 		if s.Side && crsi[200] < config.RsiLevel && s.M5Net > config.BuyNetAmount {
-			log.Println("["+s.Coin+"][多][RSI] | 价格:", closedPrices[200], " RSI:", src200, s)
+			log.Println("["+s.Coin+"][LONG][RSI] | ", closedPrices[200], " RSI:", src200)
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && crsi[200] > (100-config.RsiLevel) && s.M5Net < -config.SideNetAmount {
-			log.Println("["+s.Coin+"][空][RSI] | 价格:", closedPrices[200], " RSI:", src200, s)
+			log.Println("["+s.Coin+"][SHORT][RSI] | ", closedPrices[200], " RSI:", src200)
 			target = append(target, s)
 			continue
 		}
 		if s.Side && s.M5Net > config.BuyNetAmount && s.M15Net > 1 && s.M15Net > (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][多][量级] | 价格:", closedPrices[200], " RSI:", src200, s)
+			log.Println("["+s.Coin+"][LONG][VOL] | ", closedPrices[200], " RSI:", src200)
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && s.M5Net < -config.SideNetAmount && s.M15Net < 1 && s.M15Net < (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][空][量级] | 价格:", closedPrices[200], " RSI:", src200, s)
+			log.Println("["+s.Coin+"][SHORT][VOL] | ", closedPrices[200], " RSI:", src200)
 			target = append(target, s)
 			continue
 		}
@@ -536,6 +633,7 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 	return target, nil
 }
 
+// 链接检查
 func checkConnection(url string) bool {
 	// 检查 URL 是否正确
 	if url == "" {
