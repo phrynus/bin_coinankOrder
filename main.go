@@ -195,9 +195,9 @@ func CoinankGo() error {
 			log.Println(err)
 			return nil
 		}
-
+	} else {
+		log.Println("----------")
 	}
-	log.Println("----------")
 	return nil
 }
 
@@ -225,8 +225,8 @@ func ordersAccount(symbols []FundData) (OpenSymbols []FundData, err error) {
 	}
 	// 计算已用余额
 	usedBalance := totalPositionInitialMargin + totalOpenOrderInitialMargin
-	if usedBalance > totalWalletBalance*0.5 || totalWalletBalance == 0 {
-		return nil, fmt.Errorf("Use more than 50%")
+	if usedBalance > totalWalletBalance*config.MarginUtilizationRate || totalWalletBalance == 0 {
+		return nil, fmt.Errorf("use more than 50%")
 	}
 
 	for _, symbol := range symbols {
@@ -240,11 +240,63 @@ func ordersAccount(symbols []FundData) (OpenSymbols []FundData, err error) {
 			log.Println(err)
 			continue
 		}
-		if PositionAmt == 0 {
-			log.Println(symbol.Coin, "NO POSITION")
-			// 去挂单
-			OpenSymbols = append(OpenSymbols, symbol)
+		asset2, err := getAccountPositionSymbolsFundDataFan(account.Positions, symbol)
+		if err != nil {
+			log.Println(err)
+			continue
 		}
+		PositionAmt2, err := strconv.ParseFloat(asset2.PositionAmt, 64)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		if !config.Duak {
+			if PositionAmt == 0 && PositionAmt2 == 0 { //都没有
+				log.Println(symbol.Coin, "NO POSITION")
+				// 去挂单
+				OpenSymbols = append(OpenSymbols, symbol)
+				continue
+
+			} else if PositionAmt != 0 && PositionAmt2 == 0 { //正常方向有，反方向没有
+				continue
+			} else { //反方向有
+				if config.ProfitExit > 0 {
+					unrealizedProfit, err := strconv.ParseFloat(asset2.UnrealizedProfit, 64)
+					if err != nil {
+						continue
+					}
+					if unrealizedProfit < config.ProfitExit {
+						continue
+					}
+				}
+				if asset2.PositionSide == "LONG" && !symbol.Side {
+					log.Println(symbol.Coin, "LONG->SHORT / ", asset2.PositionSide)
+					OpenSymbols = append(OpenSymbols, symbol)
+					err = placeOrder(symbol.Coin+"USDT", "SELL", "LONG", false)
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+				} else if asset2.PositionSide == "SHORT" && symbol.Side {
+					log.Println(symbol.Coin, "SHORT->LONG / ", asset2.PositionSide)
+					OpenSymbols = append(OpenSymbols, symbol)
+					err = placeOrder(symbol.Coin+"USDT", "BUY", "SHORT", false)
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+
+				}
+			}
+			continue
+		} else {
+			if PositionAmt == 0 {
+				log.Println(symbol.Coin, "NO POSITION")
+				// 去挂单
+				OpenSymbols = append(OpenSymbols, symbol)
+			}
+		}
+
 	}
 
 	return OpenSymbols, nil
@@ -260,30 +312,30 @@ func ordersOrders(symbols []FundData) error {
 	}
 	// 收集已取消的挂单
 	// 取消超时订单
-	for _, order := range openOrders {
+	for i, order := range openOrders {
+		// 只有开单才处理
+		if order.ClosePosition {
+			continue
+		}
 		// 取订单时间
 		now := time.Now().UnixMilli()
-		if now-order.UpdateTime > 600000 {
-			// 判断UpdateTime 更新时间是否过期10分钟
+		if now-order.UpdateTime > config.OrdersTimeout*1000 {
+			// 判断UpdateTime 更新时间是否过期
 			log.Println(order.Symbol, "Expired")
 			err := cancelOrder(order.Symbol, order.OrderID)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			// 删除 openOrders 里面的 order
-			for i, v := range openOrders {
-				if v.OrderID != order.OrderID {
-					openOrders = append(openOrders[:i], openOrders[i+1:]...)
-				}
-			}
+			//清除订单
+			openOrders[i].Symbol = ""
 		}
 
 	}
 	// 开始挂单
 	for _, symbol := range symbols {
 		order, err := getOrderSymbolsFundData(openOrders, symbol.Coin+"USDT")
-		if err != nil {
+		if err != nil { // 没有持有
 			log.Println(symbol.Coin, "Order")
 			if symbol.Side {
 				err = placeOrder(symbol.Coin+"USDT", "BUY", "LONG", true)
@@ -298,6 +350,10 @@ func ordersOrders(symbols []FundData) error {
 					continue
 				}
 			}
+			continue
+		}
+		// 平仓单
+		if order.ClosePosition {
 			continue
 		}
 		// 反转
@@ -334,7 +390,7 @@ func ordersOrders(symbols []FundData) error {
 }
 
 // 下单
-func placeOrder(symbol string, side futures.SideType, positionSide futures.PositionSideType, isBokk bool) error {
+func placeOrder(symbol string, side futures.SideType, positionSide futures.PositionSideType, isBook bool) error {
 	// 取订单铺
 	book, ree := client.NewDepthService().Symbol(symbol).Limit(50).Do(context.Background())
 	if ree != nil {
@@ -347,17 +403,10 @@ func placeOrder(symbol string, side futures.SideType, positionSide futures.Posit
 		price = book.Bids[config.PriceDepth-1].Price
 	} else if side == "SELL" && positionSide == "LONG" {
 		price = book.Asks[config.PriceDepth-1].Price
-		if !isBokk {
-			price = book.Bids[0].Price
-		}
 	} else if side == "BUY" && positionSide == "SHORT" {
 		price = book.Bids[config.PriceDepth-1].Price
-		if !isBokk {
-			price = book.Bids[0].Price
-		}
 	} else if side == "SELL" && positionSide == "SHORT" {
 		price = book.Asks[config.PriceDepth-1].Price
-
 	}
 
 	prices, err := strconv.ParseFloat(price, 64)
@@ -365,7 +414,7 @@ func placeOrder(symbol string, side futures.SideType, positionSide futures.Posit
 		log.Println(err)
 		return err
 	}
-	log.Println(prices)
+	log.Println(symbol, side, positionSide, prices)
 	// 根据  prices 和cconfig.amount 计算出数量
 	amount := config.Amount / prices
 	// infoData 取到币种信息 设置数量和价格小数位
@@ -380,12 +429,19 @@ func placeOrder(symbol string, side futures.SideType, positionSide futures.Posit
 		log.Println(err)
 		return err
 	}
-	pricesStr := strconv.FormatFloat(prices, 'f', -1, 64)
-
-	_, err = client.NewCreateOrderService().Symbol(symbol).Type("LIMIT").Price(pricesStr).Side(side).PositionSide(positionSide).Quantity(amountStr).TimeInForce("GTC").Do(context.Background())
-	if err != nil {
-		log.Println(err)
-		return err
+	if isBook {
+		pricesStr := strconv.FormatFloat(prices, 'f', -1, 64)
+		_, err = client.NewCreateOrderService().Symbol(symbol).Type("LIMIT").Price(pricesStr).Side(side).PositionSide(positionSide).Quantity(amountStr).TimeInForce("GTC").Do(context.Background())
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	} else {
+		_, err = client.NewCreateOrderService().Symbol(symbol).Type("MARKET").Side(side).PositionSide(positionSide).Quantity(amountStr).Do(context.Background())
+		if err != nil {
+			log.Println(err)
+			return err
+		}
 	}
 
 	return nil
@@ -451,6 +507,22 @@ func getAccountPositionSymbolsFundData(symbols []*futures.AccountPosition, symbo
 		side = "LONG"
 	} else {
 		side = "SHORT"
+	}
+	for _, s := range symbols {
+		if s.Symbol == symbolName.Coin+"USDT" && s.PositionSide == side {
+			return s, nil
+		}
+	}
+	return getSymbol, fmt.Errorf("没有找到%s", symbolName)
+}
+
+// 取得当前仓位的币种信息 反
+func getAccountPositionSymbolsFundDataFan(symbols []*futures.AccountPosition, symbolName FundData) (getSymbol *futures.AccountPosition, err error) {
+	var side futures.PositionSideType
+	if symbolName.Side {
+		side = "SHORT"
+	} else {
+		side = "LONG"
 	}
 	for _, s := range symbols {
 		if s.Symbol == symbolName.Coin+"USDT" && s.PositionSide == side {
@@ -590,13 +662,13 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 	target := make([]FundData, 0)
 	for _, s := range symbols {
 		klines, err := client.NewKlinesService().Symbol(s.Coin + "USDT").
-			Interval("1m").Limit(201).Do(context.Background())
+			Interval("5m").Limit(202).Do(context.Background())
 		if err != nil {
 			fmt.Println(err)
 			return nil, err
 		}
-		closedPrices := make([]float64, 0, len(klines))
-		for _, kline := range klines[:len(klines)] {
+		closedPrices := make([]float64, 0, len(klines)-1)
+		for _, kline := range klines[:len(klines)-1] {
 			closeFloat, err := strconv.ParseFloat(kline.Close, 64)
 			if err != nil {
 				log.Println(err)
@@ -608,26 +680,31 @@ func filterSymbols(symbols []FundData) ([]FundData, error) {
 		crsi := CRSI(closedPrices, config.RsiLength)
 		// fmt.Println(s.Coin, s.Side, closedPrices[200], crsi[200])
 		src200 := fmt.Sprintf("%.2f", crsi[200])
-		if s.Side && crsi[200] < config.RsiLevel && s.M5Net > config.BuyNetAmount {
-			log.Println("["+s.Coin+"][LONG][RSI] | ", closedPrices[200], " RSI:", src200)
-			target = append(target, s)
-			continue
-		}
-		if !s.Side && crsi[200] > (100-config.RsiLevel) && s.M5Net < -config.SideNetAmount {
-			log.Println("["+s.Coin+"][SHORT][RSI] | ", closedPrices[200], " RSI:", src200)
-			target = append(target, s)
-			continue
-		}
+		M5Net, _ := takeDivisible(s.M5Net/1000000, "0.01")
+		M15Net, _ := takeDivisible(s.M15Net/1000000, "0.01")
+		// VOL
 		if s.Side && s.M5Net > config.BuyNetAmount && s.M15Net > 1 && s.M15Net > (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][LONG][VOL] | ", closedPrices[200], " RSI:", src200)
+			log.Println("["+s.Coin+"][LONG][VOL] | ", "RSI:", src200, " M5:", M5Net, " M15:", M15Net)
 			target = append(target, s)
 			continue
 		}
 		if !s.Side && s.M5Net < -config.SideNetAmount && s.M15Net < 1 && s.M15Net < (s.M5Net*config.MultipleNetAmount) {
-			log.Println("["+s.Coin+"][SHORT][VOL] | ", closedPrices[200], " RSI:", src200)
+			log.Println("["+s.Coin+"][SHORT][VOL] | ", "RSI:", src200, " M5:", M5Net, " M15:", M15Net)
 			target = append(target, s)
 			continue
 		}
+		// CRSI
+		if s.Side && crsi[200] < config.RsiLevel {
+			log.Println("["+s.Coin+"][LONG][RSI] | ", "RSI:", src200, " M5:", M5Net, " M15:", M15Net)
+			target = append(target, s)
+			continue
+		}
+		if !s.Side && crsi[200] > (100-config.RsiLevel) {
+			log.Println("["+s.Coin+"][SHORT][RSI] | ", "RSI:", src200, " M5:", M5Net, " M15:", M15Net)
+			target = append(target, s)
+			continue
+		}
+
 	}
 
 	return target, nil

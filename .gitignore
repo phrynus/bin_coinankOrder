@@ -25,3 +25,6 @@ build
 .idea
 /logs/
 /logs/*
+/coinankOrder.zip
+/coinankOrder_linux_amd64
+/bin_coinankOrder.zip
